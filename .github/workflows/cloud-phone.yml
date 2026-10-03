@@ -1,0 +1,86 @@
+name: Cloud Phone
+
+# 在 GitHub Actions 的 Linux runner 上开一台临时 Android 云手机。
+# 定位：自动化测试 / 远程调试用的临时设备，单次最长 6 小时（Actions 硬性上限），用完即弃。
+
+on:
+  workflow_dispatch:
+    inputs:
+      android:
+        description: 'Android 版本（免费镜像支持 9.0 ~ 14.0）'
+        required: true
+        default: '13.0'
+        type: choice
+        options: ['9.0', '10.0', '11.0', '12.0', '13.0', '14.0']
+      device:
+        description: '机型'
+        required: true
+        default: 'Samsung Galaxy S10'
+        type: choice
+        options:
+          - Samsung Galaxy S10
+          - Samsung Galaxy S9
+          - Samsung Galaxy S8
+          - Samsung Galaxy S7
+          - Samsung Galaxy S6
+          - Nexus 4
+          - Nexus 5
+          - Nexus 7
+          - Pixel C
+      duration:
+        description: '保持在线的分钟数（上限 350，超过会被 Actions 强杀）'
+        required: true
+        default: '300'
+      tunnel:
+        description: '公网穿透方式'
+        required: true
+        default: 'cloudflared'
+        type: choice
+        options: ['cloudflared', 'tailscale', 'ngrok']
+      apk_url:
+        description: '可选：开机后自动安装的 APK 直链'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-phone-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  phone:
+    # 公共仓库 = 4 核 / 16G / 分钟数不限；私有仓库只有 2 核 8G，会吃掉每月 2000 分钟配额。
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: 环境自检（KVM / 磁盘 / 内存）
+        run: bash scripts/preflight.sh
+
+      - name: 启动 Android 容器
+        run: bash scripts/boot-android.sh
+        env:
+          ANDROID_VERSION: ${{ inputs.android }}
+          DEVICE: ${{ inputs.device }}
+          APK_URL: ${{ inputs.apk_url }}
+
+      - name: 打通公网隧道
+        run: bash scripts/tunnel.sh
+        env:
+          TUNNEL: ${{ inputs.tunnel }}
+          TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
+
+      - name: 保持在线
+        run: bash scripts/keepalive.sh
+        env:
+          DURATION_MIN: ${{ inputs.duration }}
+
+      - name: 收尾
+        if: always()
+        run: bash scripts/teardown.sh
